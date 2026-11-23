@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "policy-rag"
+version = "0.1.0"
+description = "Cited question answering over company policy documents: hybrid retrieval (pgvector + full text), a LangGraph flow with a code-level grounding check, and an eval for recall@k, groundedness, refusals and cost"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+  "langgraph>=1.0,<2",
+  "model2vec>=0.6",
+  "numpy>=2",
+  "pydantic>=2.10,<3",
+  "psycopg[binary]>=3.2,<4",
+  "pgvector>=0.4",
+  "anthropic>=2.10,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.scripts]
+policy-rag = "policy_rag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not model'"
+markers = [
+  "model: needs the local embedding model (downloads ~130 MB from Hugging Face once)",
+  "postgres: needs POLICY_RAG_PG_DSN pointing at Postgres with pgvector",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
