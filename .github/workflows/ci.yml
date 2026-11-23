@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      claude_eval:
+        description: "Also run the eval with Claude as the answerer (spends API credits; needs the ANTHROPIC_API_KEY secret)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests && ruff format --check src tests
+      - run: pytest
+
+  eval:
+    # Real local embedding model, SQLite store and Postgres + pgvector store, both gated.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      POLICY_RAG_PG_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-potion-retrieval-32M
+      - run: pip install -e ".[dev]"
+      - name: Store contract tests on Postgres + pgvector
+        run: pytest -m postgres
+      - name: Model tests (gate, source-filter ablation, hybrid vs single rankers)
+        run: pytest -m model
+      - name: Eval on SQLite (gated)
+        run: policy-rag eval --out reports/eval-sqlite.json --gate eval/gate.json
+      - name: Eval on Postgres + pgvector (gated)
+        run: policy-rag --store postgres eval --out reports/eval-postgres.json --gate eval/gate.json
+      - name: Ablation without the source filter (expected to miss the gate; reported, not gated)
+        run: policy-rag --include-superseded --include-unreviewed eval --no-calibrate --out reports/eval-nofilter.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports
+          path: reports/
+
+  claude-eval:
+    if: github.event_name == 'workflow_dispatch' && inputs.claude_eval
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-potion-retrieval-32M
+      - run: pip install -e .
+      - run: policy-rag --answerer claude eval --out reports/eval-claude.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-claude
+          path: reports/
